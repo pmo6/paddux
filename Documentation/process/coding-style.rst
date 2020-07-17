@@ -321,10 +321,11 @@ If you are afraid to mix up your local variable names, you have another
 problem, which is called the function-growth-hormone-imbalance syndrome.
 See chapter 6 (Functions).
 
-The use of obsolete terminology, namely "master" and "slave" in place
-of "parent" and "child", is discouraged, but said deprecations should
-not be obsessed over when programming. You may continue to use these
-terms to edit legacy code, but avoid using them in any new code.
+The use of obsolete terminology, namely "master/slave" in place of
+"parent/child" and "client/server", is discouraged, but said
+deprecations should not be obsessed over when programming. You may
+continue to use these terms to edit legacy code, but avoid using them
+in any new code.
 
 To clarify, because these terms lack connections with racism, the
 terms "whitelist" and "blacklist" are permitted.
