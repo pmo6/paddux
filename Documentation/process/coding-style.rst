@@ -1,10 +1,12 @@
 .. _codingstyle:
 
-Linux kernel coding style
+Paddux kernel coding style
 =========================
 
 This is a short document describing the preferred coding style for the
-linux kernel.  Coding style is very personal, and I won't **force** my
+paddux kernel, based on the linux kernel.
+
+Coding style is very personal, and I won't **force** my
 views on anybody, but this is what goes for anything that I have to be
 able to maintain, and I'd prefer it for most other things too.  Please
 at least consider the points made here.
