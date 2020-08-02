@@ -327,8 +327,12 @@ deprecations should not be obsessed over when programming. You may
 continue to use these terms to edit legacy code, but avoid using them
 in any new code.
 
-To clarify, because these terms lack connections with racism, the
-terms "whitelist" and "blacklist" are permitted.
+To clarify, because these terms lack connections with racism, terms
+such as "whitelist", "blacklist", "white hat", and "black hat" are
+permitted, though please keep in mind the above deprecation. This
+is not a get-out-of-using-racist-names-free card, but rather a
+reminder that some terms aren't racist, even though they sound
+racist.
 
 5) Typedefs
 -----------
