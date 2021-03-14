@@ -9,6 +9,7 @@
 #include "i915_drv.h"
 
 const struct drm_i915_gem_object_ops i915_gem_lmem_obj_ops = {
+	.name = "i915_gem_object_lmem",
 	.flags = I915_GEM_OBJECT_HAS_IOMEM,
 
 	.get_pages = i915_gem_object_get_pages_buddy,
@@ -30,18 +31,13 @@ i915_gem_object_create_lmem(struct drm_i915_private *i915,
 					     size, flags);
 }
 
-struct drm_i915_gem_object *
-__i915_gem_lmem_object_create(struct intel_memory_region *mem,
-			      resource_size_t size,
-			      unsigned int flags)
+int __i915_gem_lmem_object_init(struct intel_memory_region *mem,
+				struct drm_i915_gem_object *obj,
+				resource_size_t size,
+				unsigned int flags)
 {
 	static struct lock_class_key lock_class;
 	struct drm_i915_private *i915 = mem->i915;
-	struct drm_i915_gem_object *obj;
-
-	obj = i915_gem_object_alloc();
-	if (!obj)
-		return ERR_PTR(-ENOMEM);
 
 	drm_gem_private_object_init(&i915->drm, &obj->base, size);
 	i915_gem_object_init(obj, &i915_gem_lmem_obj_ops, &lock_class);
@@ -52,5 +48,5 @@ __i915_gem_lmem_object_create(struct intel_memory_region *mem,
 
 	i915_gem_object_init_memory_region(obj, mem, flags);
 
-	return obj;
+	return 0;
 }

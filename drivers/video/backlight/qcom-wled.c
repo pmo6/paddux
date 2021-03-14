@@ -433,13 +433,8 @@ static int wled5_ovp_delay(struct wled *wled)
 static int wled_update_status(struct backlight_device *bl)
 {
 	struct wled *wled = bl_get_data(bl);
-	u16 brightness = bl->props.brightness;
+	u16 brightness = backlight_get_brightness(bl);
 	int rc = 0;
-
-	if (bl->props.power != FB_BLANK_UNBLANK ||
-	    bl->props.fb_blank != FB_BLANK_UNBLANK ||
-	    bl->props.state & BL_CORE_FBBLANK)
-		brightness = 0;
 
 	mutex_lock(&wled->lock);
 	if (brightness) {
@@ -1287,14 +1282,6 @@ static const struct wled_var_cfg wled4_string_i_limit_cfg = {
 	.size = ARRAY_SIZE(wled4_string_i_limit_values),
 };
 
-static const struct wled_var_cfg wled3_string_cfg = {
-	.size = 8,
-};
-
-static const struct wled_var_cfg wled4_string_cfg = {
-	.size = 16,
-};
-
 static const struct wled_var_cfg wled5_mod_sel_cfg = {
 	.size = 2,
 };
@@ -1705,7 +1692,7 @@ static int wled_probe(struct platform_device *pdev)
 
 static int wled_remove(struct platform_device *pdev)
 {
-	struct wled *wled = dev_get_drvdata(&pdev->dev);
+	struct wled *wled = platform_get_drvdata(pdev);
 
 	mutex_destroy(&wled->lock);
 	cancel_delayed_work_sync(&wled->ovp_work);

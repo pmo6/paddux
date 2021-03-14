@@ -5,12 +5,12 @@
 
 #include <drm/drm_atomic_state_helper.h>
 
-#include "intel_bw.h"
-#include "intel_display_types.h"
-#include "intel_sideband.h"
 #include "intel_atomic.h"
+#include "intel_bw.h"
+#include "intel_cdclk.h"
+#include "intel_display_types.h"
 #include "intel_pm.h"
-
+#include "intel_sideband.h"
 
 /* Parameters for Qclk Geyserville (QGV) */
 struct intel_qgv_point {
@@ -20,75 +20,8 @@ struct intel_qgv_point {
 struct intel_qgv_info {
 	struct intel_qgv_point points[I915_NUM_QGV_POINTS];
 	u8 num_points;
-	u8 num_channels;
 	u8 t_bl;
-	enum intel_dram_type dram_type;
 };
-
-static int icl_pcode_read_mem_global_info(struct drm_i915_private *dev_priv,
-					  struct intel_qgv_info *qi)
-{
-	u32 val = 0;
-	int ret;
-
-	ret = sandybridge_pcode_read(dev_priv,
-				     ICL_PCODE_MEM_SUBSYSYSTEM_INFO |
-				     ICL_PCODE_MEM_SS_READ_GLOBAL_INFO,
-				     &val, NULL);
-	if (ret)
-		return ret;
-
-	if (IS_GEN(dev_priv, 12)) {
-		switch (val & 0xf) {
-		case 0:
-			qi->dram_type = INTEL_DRAM_DDR4;
-			break;
-		case 3:
-			qi->dram_type = INTEL_DRAM_LPDDR4;
-			break;
-		case 4:
-			qi->dram_type = INTEL_DRAM_DDR3;
-			break;
-		case 5:
-			qi->dram_type = INTEL_DRAM_LPDDR3;
-			break;
-		default:
-			MISSING_CASE(val & 0xf);
-			break;
-		}
-	} else if (IS_GEN(dev_priv, 11)) {
-		switch (val & 0xf) {
-		case 0:
-			qi->dram_type = INTEL_DRAM_DDR4;
-			break;
-		case 1:
-			qi->dram_type = INTEL_DRAM_DDR3;
-			break;
-		case 2:
-			qi->dram_type = INTEL_DRAM_LPDDR3;
-			break;
-		case 3:
-			qi->dram_type = INTEL_DRAM_LPDDR4;
-			break;
-		default:
-			MISSING_CASE(val & 0xf);
-			break;
-		}
-	} else {
-		MISSING_CASE(INTEL_GEN(dev_priv));
-		qi->dram_type = INTEL_DRAM_LPDDR3; /* Conservative default */
-	}
-
-	qi->num_channels = (val & 0xf0) >> 4;
-	qi->num_points = (val & 0xf00) >> 8;
-
-	if (IS_GEN(dev_priv, 12))
-		qi->t_bl = qi->dram_type == INTEL_DRAM_DDR4 ? 4 : 16;
-	else if (IS_GEN(dev_priv, 11))
-		qi->t_bl = qi->dram_type == INTEL_DRAM_DDR4 ? 4 : 8;
-
-	return 0;
-}
 
 static int icl_pcode_read_qgv_point_info(struct drm_i915_private *dev_priv,
 					 struct intel_qgv_point *sp,
@@ -139,11 +72,15 @@ int icl_pcode_restrict_qgv_points(struct drm_i915_private *dev_priv,
 static int icl_get_qgv_points(struct drm_i915_private *dev_priv,
 			      struct intel_qgv_info *qi)
 {
+	const struct dram_info *dram_info = &dev_priv->dram_info;
 	int i, ret;
 
-	ret = icl_pcode_read_mem_global_info(dev_priv, qi);
-	if (ret)
-		return ret;
+	qi->num_points = dram_info->num_qgv_points;
+
+	if (IS_GEN(dev_priv, 12))
+		qi->t_bl = dev_priv->dram_info.type == INTEL_DRAM_DDR4 ? 4 : 16;
+	else if (IS_GEN(dev_priv, 11))
+		qi->t_bl = dev_priv->dram_info.type == INTEL_DRAM_DDR4 ? 4 : 8;
 
 	if (drm_WARN_ON(&dev_priv->drm,
 			qi->num_points > ARRAY_SIZE(qi->points)))
@@ -199,11 +136,17 @@ static const struct intel_sa_info tgl_sa_info = {
 	.displayrtids = 256,
 };
 
+static const struct intel_sa_info rkl_sa_info = {
+	.deburst = 16,
+	.deprogbwlimit = 20, /* GB/s */
+	.displayrtids = 128,
+};
+
 static int icl_get_bw_info(struct drm_i915_private *dev_priv, const struct intel_sa_info *sa)
 {
 	struct intel_qgv_info qi = {};
 	bool is_y_tile = true; /* assume y tile may be used */
-	int num_channels;
+	int num_channels = dev_priv->dram_info.num_channels;
 	int deinterleave;
 	int ipqdepth, ipqdepthpch;
 	int dclk_max;
@@ -216,7 +159,6 @@ static int icl_get_bw_info(struct drm_i915_private *dev_priv, const struct intel
 			    "Failed to get memory subsystem information, ignoring bandwidth limits");
 		return ret;
 	}
-	num_channels = qi.num_channels;
 
 	deinterleave = DIV_ROUND_UP(num_channels, is_y_tile ? 4 : 2);
 	dclk_max = icl_sagv_max_dclk(&qi);
@@ -309,7 +251,9 @@ void intel_bw_init_hw(struct drm_i915_private *dev_priv)
 	if (!HAS_DISPLAY(dev_priv))
 		return;
 
-	if (IS_GEN(dev_priv, 12))
+	if (IS_ROCKETLAKE(dev_priv))
+		icl_get_bw_info(dev_priv, &rkl_sa_info);
+	else if (IS_GEN(dev_priv, 12))
 		icl_get_bw_info(dev_priv, &tgl_sa_info);
 	else if (IS_GEN(dev_priv, 11))
 		icl_get_bw_info(dev_priv, &icl_sa_info);
@@ -418,6 +362,141 @@ intel_atomic_get_bw_state(struct intel_atomic_state *state)
 		return ERR_CAST(bw_state);
 
 	return to_intel_bw_state(bw_state);
+}
+
+int skl_bw_calc_min_cdclk(struct intel_atomic_state *state)
+{
+	struct drm_i915_private *dev_priv = to_i915(state->base.dev);
+	struct intel_bw_state *new_bw_state = NULL;
+	struct intel_bw_state *old_bw_state = NULL;
+	const struct intel_crtc_state *crtc_state;
+	struct intel_crtc *crtc;
+	int max_bw = 0;
+	int slice_id;
+	enum pipe pipe;
+	int i;
+
+	for_each_new_intel_crtc_in_state(state, crtc, crtc_state, i) {
+		enum plane_id plane_id;
+		struct intel_dbuf_bw *crtc_bw;
+
+		new_bw_state = intel_atomic_get_bw_state(state);
+		if (IS_ERR(new_bw_state))
+			return PTR_ERR(new_bw_state);
+
+		old_bw_state = intel_atomic_get_old_bw_state(state);
+
+		crtc_bw = &new_bw_state->dbuf_bw[crtc->pipe];
+
+		memset(&crtc_bw->used_bw, 0, sizeof(crtc_bw->used_bw));
+
+		if (!crtc_state->hw.active)
+			continue;
+
+		for_each_plane_id_on_crtc(crtc, plane_id) {
+			const struct skl_ddb_entry *plane_alloc =
+				&crtc_state->wm.skl.plane_ddb_y[plane_id];
+			const struct skl_ddb_entry *uv_plane_alloc =
+				&crtc_state->wm.skl.plane_ddb_uv[plane_id];
+			unsigned int data_rate = crtc_state->data_rate[plane_id];
+			unsigned int dbuf_mask = 0;
+
+			dbuf_mask |= skl_ddb_dbuf_slice_mask(dev_priv, plane_alloc);
+			dbuf_mask |= skl_ddb_dbuf_slice_mask(dev_priv, uv_plane_alloc);
+
+			/*
+			 * FIXME: To calculate that more properly we probably
+			 * need to to split per plane data_rate into data_rate_y
+			 * and data_rate_uv for multiplanar formats in order not
+			 * to get accounted those twice if they happen to reside
+			 * on different slices.
+			 * However for pre-icl this would work anyway because
+			 * we have only single slice and for icl+ uv plane has
+			 * non-zero data rate.
+			 * So in worst case those calculation are a bit
+			 * pessimistic, which shouldn't pose any significant
+			 * problem anyway.
+			 */
+			for_each_dbuf_slice_in_mask(slice_id, dbuf_mask)
+				crtc_bw->used_bw[slice_id] += data_rate;
+		}
+	}
+
+	if (!old_bw_state)
+		return 0;
+
+	for_each_pipe(dev_priv, pipe) {
+		struct intel_dbuf_bw *crtc_bw;
+
+		crtc_bw = &new_bw_state->dbuf_bw[pipe];
+
+		for_each_dbuf_slice(slice_id) {
+			/*
+			 * Current experimental observations show that contrary
+			 * to BSpec we get underruns once we exceed 64 * CDCLK
+			 * for slices in total.
+			 * As a temporary measure in order not to keep CDCLK
+			 * bumped up all the time we calculate CDCLK according
+			 * to this formula for  overall bw consumed by slices.
+			 */
+			max_bw += crtc_bw->used_bw[slice_id];
+		}
+	}
+
+	new_bw_state->min_cdclk = max_bw / 64;
+
+	if (new_bw_state->min_cdclk != old_bw_state->min_cdclk) {
+		int ret = intel_atomic_lock_global_state(&new_bw_state->base);
+
+		if (ret)
+			return ret;
+	}
+
+	return 0;
+}
+
+int intel_bw_calc_min_cdclk(struct intel_atomic_state *state)
+{
+	struct drm_i915_private *dev_priv = to_i915(state->base.dev);
+	struct intel_bw_state *new_bw_state = NULL;
+	struct intel_bw_state *old_bw_state = NULL;
+	const struct intel_crtc_state *crtc_state;
+	struct intel_crtc *crtc;
+	int min_cdclk = 0;
+	enum pipe pipe;
+	int i;
+
+	for_each_new_intel_crtc_in_state(state, crtc, crtc_state, i) {
+		new_bw_state = intel_atomic_get_bw_state(state);
+		if (IS_ERR(new_bw_state))
+			return PTR_ERR(new_bw_state);
+
+		old_bw_state = intel_atomic_get_old_bw_state(state);
+	}
+
+	if (!old_bw_state)
+		return 0;
+
+	for_each_pipe(dev_priv, pipe) {
+		struct intel_cdclk_state *cdclk_state;
+
+		cdclk_state = intel_atomic_get_new_cdclk_state(state);
+		if (!cdclk_state)
+			return 0;
+
+		min_cdclk = max(cdclk_state->min_cdclk[pipe], min_cdclk);
+	}
+
+	new_bw_state->min_cdclk = min_cdclk;
+
+	if (new_bw_state->min_cdclk != old_bw_state->min_cdclk) {
+		int ret = intel_atomic_lock_global_state(&new_bw_state->base);
+
+		if (ret)
+			return ret;
+	}
+
+	return 0;
 }
 
 int intel_bw_atomic_check(struct intel_atomic_state *state)

@@ -160,7 +160,7 @@ implementation.
    ia64/index
    m68k/index
    mips/index
-   nios2/nios2
+   nios2/index
    openrisc/index
    parisc/index
    powerpc/index
@@ -171,16 +171,19 @@ implementation.
    x86/index
    xtensa/index
 
-Filesystem Documentation
-------------------------
+Other documentation
+-------------------
 
-The documentation in this section are provided by specific filesystem
-subprojects.
+There are several unsorted documents that don't seem to fit on other parts
+of the documentation body, or may require some adjustments and/or conversion
+to ReStructured Text format, or are simply too old.
 
 .. toctree::
    :maxdepth: 2
 
-   filesystems/ext4/index
+   staging/index
+   watch_queue
+
 
 Translations
 ------------

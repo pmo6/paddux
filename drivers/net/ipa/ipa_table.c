@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0
 
 /* Copyright (c) 2012-2018, The Linux Foundation. All rights reserved.
- * Copyright (C) 2018-2020 Linaro Ltd.
+ * Copyright (C) 2018-2021 Linaro Ltd.
  */
 
 #include <linux/types.h>
@@ -239,6 +239,11 @@ static void ipa_table_validate_build(void)
 
 #endif /* !IPA_VALIDATE */
 
+bool ipa_table_hash_support(struct ipa *ipa)
+{
+	return ipa->version != IPA_VERSION_4_2;
+}
+
 /* Zero entry count means no table, so just return a 0 address */
 static dma_addr_t ipa_table_addr(struct ipa *ipa, bool filter_mask, u16 count)
 {
@@ -412,8 +417,7 @@ int ipa_table_hash_flush(struct ipa *ipa)
 	struct gsi_trans *trans;
 	u32 val;
 
-	/* IPA version 4.2 does not support hashed tables */
-	if (ipa->version == IPA_VERSION_4_2)
+	if (!ipa_table_hash_support(ipa))
 		return 0;
 
 	trans = ipa_cmd_trans_alloc(ipa, 1);
@@ -422,8 +426,8 @@ int ipa_table_hash_flush(struct ipa *ipa)
 		return -EBUSY;
 	}
 
-	val = IPV4_FILTER_HASH_FLUSH | IPV6_FILTER_HASH_FLUSH;
-	val |= IPV6_ROUTER_HASH_FLUSH | IPV4_ROUTER_HASH_FLUSH;
+	val = IPV4_FILTER_HASH_FMASK | IPV6_FILTER_HASH_FMASK;
+	val |= IPV6_ROUTER_HASH_FMASK | IPV4_ROUTER_HASH_FMASK;
 
 	ipa_cmd_register_write_add(trans, offset, val, val, false);
 
@@ -505,7 +509,7 @@ void ipa_table_teardown(struct ipa *ipa)
 
 /**
  * ipa_filter_tuple_zero() - Zero an endpoint's hashed filter tuple
- * @endpoint_id:	Endpoint whose filter hash tuple should be zeroed
+ * @endpoint:	Endpoint whose filter hash tuple should be zeroed
  *
  * Endpoint must be for the AP (not modem) and support filtering. Updates
  * the filter hash values without changing route ones.
@@ -521,7 +525,7 @@ static void ipa_filter_tuple_zero(struct ipa_endpoint *endpoint)
 	val = ioread32(endpoint->ipa->reg_virt + offset);
 
 	/* Zero all filter-related fields, preserving the rest */
-	u32_replace_bits(val, 0, IPA_REG_ENDP_FILTER_HASH_MSK_ALL);
+	u32p_replace_bits(&val, 0, IPA_REG_ENDP_FILTER_HASH_MSK_ALL);
 
 	iowrite32(val, endpoint->ipa->reg_virt + offset);
 }
@@ -531,8 +535,7 @@ static void ipa_filter_config(struct ipa *ipa, bool modem)
 	enum gsi_ee_id ee_id = modem ? GSI_EE_MODEM : GSI_EE_AP;
 	u32 ep_mask = ipa->filter_map;
 
-	/* IPA version 4.2 has no hashed route tables */
-	if (ipa->version == IPA_VERSION_4_2)
+	if (!ipa_table_hash_support(ipa))
 		return;
 
 	while (ep_mask) {
@@ -560,6 +563,7 @@ static bool ipa_route_id_modem(u32 route_id)
 
 /**
  * ipa_route_tuple_zero() - Zero a hashed route table entry tuple
+ * @ipa:	IPA pointer
  * @route_id:	Route table entry whose hash tuple should be zeroed
  *
  * Updates the route hash values without changing filter ones.
@@ -572,7 +576,7 @@ static void ipa_route_tuple_zero(struct ipa *ipa, u32 route_id)
 	val = ioread32(ipa->reg_virt + offset);
 
 	/* Zero all route-related fields, preserving the rest */
-	u32_replace_bits(val, 0, IPA_REG_ENDP_ROUTER_HASH_MSK_ALL);
+	u32p_replace_bits(&val, 0, IPA_REG_ENDP_ROUTER_HASH_MSK_ALL);
 
 	iowrite32(val, ipa->reg_virt + offset);
 }
@@ -581,8 +585,7 @@ static void ipa_route_config(struct ipa *ipa, bool modem)
 {
 	u32 route_id;
 
-	/* IPA version 4.2 has no hashed route tables */
-	if (ipa->version == IPA_VERSION_4_2)
+	if (!ipa_table_hash_support(ipa))
 		return;
 
 	for (route_id = 0; route_id < IPA_ROUTE_COUNT_MAX; route_id++)

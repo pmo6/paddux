@@ -7,6 +7,7 @@
 #include "ice_lib.h"
 #include "ice_fltr.h"
 #include "ice_dcb_lib.h"
+#include "ice_devlink.h"
 
 /**
  * ice_vsi_type_str - maps VSI type enum to string equivalents
@@ -127,8 +128,14 @@ static void ice_vsi_set_num_desc(struct ice_vsi *vsi)
 	case ICE_VSI_PF:
 	case ICE_VSI_CTRL:
 	case ICE_VSI_LB:
-		vsi->num_rx_desc = ICE_DFLT_NUM_RX_DESC;
-		vsi->num_tx_desc = ICE_DFLT_NUM_TX_DESC;
+		/* a user could change the values of num_[tr]x_desc using
+		 * ethtool -G so we should keep those values instead of
+		 * overwriting them with the defaults.
+		 */
+		if (!vsi->num_rx_desc)
+			vsi->num_rx_desc = ICE_DFLT_NUM_RX_DESC;
+		if (!vsi->num_tx_desc)
+			vsi->num_tx_desc = ICE_DFLT_NUM_TX_DESC;
 		break;
 	default:
 		dev_dbg(ice_pf_to_dev(vsi->back), "Not setting number of Tx/Rx descriptors for VSI type %d\n",
@@ -154,8 +161,9 @@ static void ice_vsi_set_num_qs(struct ice_vsi *vsi, u16 vf_id)
 
 	switch (vsi->type) {
 	case ICE_VSI_PF:
-		vsi->alloc_txq = min_t(int, ice_get_avail_txq_count(pf),
-				       num_online_cpus());
+		vsi->alloc_txq = min3(pf->num_lan_msix,
+				      ice_get_avail_txq_count(pf),
+				      (u16)num_online_cpus());
 		if (vsi->req_txq) {
 			vsi->alloc_txq = vsi->req_txq;
 			vsi->num_txq = vsi->req_txq;
@@ -167,8 +175,9 @@ static void ice_vsi_set_num_qs(struct ice_vsi *vsi, u16 vf_id)
 		if (!test_bit(ICE_FLAG_RSS_ENA, pf->flags)) {
 			vsi->alloc_rxq = 1;
 		} else {
-			vsi->alloc_rxq = min_t(int, ice_get_avail_rxq_count(pf),
-					       num_online_cpus());
+			vsi->alloc_rxq = min3(pf->num_lan_msix,
+					      ice_get_avail_rxq_count(pf),
+					      (u16)num_online_cpus());
 			if (vsi->req_rxq) {
 				vsi->alloc_rxq = vsi->req_rxq;
 				vsi->num_rxq = vsi->req_rxq;
@@ -177,7 +186,9 @@ static void ice_vsi_set_num_qs(struct ice_vsi *vsi, u16 vf_id)
 
 		pf->num_lan_rx = vsi->alloc_rxq;
 
-		vsi->num_q_vectors = max_t(int, vsi->alloc_rxq, vsi->alloc_txq);
+		vsi->num_q_vectors = min_t(int, pf->num_lan_msix,
+					   max_t(int, vsi->alloc_rxq,
+						 vsi->alloc_txq));
 		break;
 	case ICE_VSI_VF:
 		vf = &pf->vf[vsi->vf_id];
@@ -240,7 +251,7 @@ static int ice_get_free_slot(void *array, int size, int curr)
  * ice_vsi_delete - delete a VSI from the switch
  * @vsi: pointer to VSI being removed
  */
-void ice_vsi_delete(struct ice_vsi *vsi)
+static void ice_vsi_delete(struct ice_vsi *vsi)
 {
 	struct ice_pf *pf = vsi->back;
 	struct ice_vsi_ctx *ctxt;
@@ -307,7 +318,7 @@ static void ice_vsi_free_arrays(struct ice_vsi *vsi)
  *
  * Returns 0 on success, negative on failure
  */
-int ice_vsi_clear(struct ice_vsi *vsi)
+static int ice_vsi_clear(struct ice_vsi *vsi)
 {
 	struct ice_pf *pf = NULL;
 	struct device *dev;
@@ -557,7 +568,7 @@ static int ice_vsi_get_qs(struct ice_vsi *vsi)
  * ice_vsi_put_qs - Release queues from VSI to PF
  * @vsi: the VSI that is going to release queues
  */
-void ice_vsi_put_qs(struct ice_vsi *vsi)
+static void ice_vsi_put_qs(struct ice_vsi *vsi)
 {
 	struct ice_pf *pf = vsi->back;
 	int i;
@@ -1190,6 +1201,18 @@ static void ice_vsi_clear_rings(struct ice_vsi *vsi)
 {
 	int i;
 
+	/* Avoid stale references by clearing map from vector to ring */
+	if (vsi->q_vectors) {
+		ice_for_each_q_vector(vsi, i) {
+			struct ice_q_vector *q_vector = vsi->q_vectors[i];
+
+			if (q_vector) {
+				q_vector->tx.ring = NULL;
+				q_vector->rx.ring = NULL;
+			}
+		}
+	}
+
 	if (vsi->tx_rings) {
 		for (i = 0; i < vsi->alloc_txq; i++) {
 			if (vsi->tx_rings[i]) {
@@ -1468,6 +1491,30 @@ static void ice_vsi_set_rss_flow_fld(struct ice_vsi *vsi)
 }
 
 /**
+ * ice_pf_state_is_nominal - checks the PF for nominal state
+ * @pf: pointer to PF to check
+ *
+ * Check the PF's state for a collection of bits that would indicate
+ * the PF is in a state that would inhibit normal operation for
+ * driver functionality.
+ *
+ * Returns true if PF is in a nominal state, false otherwise
+ */
+bool ice_pf_state_is_nominal(struct ice_pf *pf)
+{
+	DECLARE_BITMAP(check_bits, __ICE_STATE_NBITS) = { 0 };
+
+	if (!pf)
+		return false;
+
+	bitmap_set(check_bits, 0, __ICE_STATE_NOMINAL_CHECK_BITS);
+	if (bitmap_intersects(pf->state, check_bits, __ICE_STATE_NBITS))
+		return false;
+
+	return true;
+}
+
+/**
  * ice_update_eth_stats - Update VSI-specific ethernet statistics counters
  * @vsi: the VSI to be updated
  */
@@ -1667,7 +1714,7 @@ ice_vsi_cfg_txqs(struct ice_vsi *vsi, struct ice_ring **rings)
 	u16 q_idx = 0;
 	int err = 0;
 
-	qg_buf = kzalloc(sizeof(*qg_buf), GFP_KERNEL);
+	qg_buf = kzalloc(struct_size(qg_buf, txqs, 1), GFP_KERNEL);
 	if (!qg_buf)
 		return -ENOMEM;
 
@@ -1713,7 +1760,7 @@ int ice_vsi_cfg_xdp_txqs(struct ice_vsi *vsi)
 		return ret;
 
 	for (i = 0; i < vsi->num_xdp_txq; i++)
-		vsi->xdp_rings[i]->xsk_umem = ice_xsk_umem(vsi->xdp_rings[i]);
+		vsi->xdp_rings[i]->xsk_pool = ice_xsk_pool(vsi->xdp_rings[i]);
 
 	return ret;
 }
@@ -1987,6 +2034,13 @@ int ice_cfg_vlan_pruning(struct ice_vsi *vsi, bool ena, bool vlan_promisc)
 	if (!vsi)
 		return -EINVAL;
 
+	/* Don't enable VLAN pruning if the netdev is currently in promiscuous
+	 * mode. VLAN pruning will be enabled when the interface exits
+	 * promiscuous mode if any VLAN filters are active.
+	 */
+	if (vsi->netdev && vsi->netdev->flags & IFF_PROMISC && ena)
+		return 0;
+
 	pf = vsi->back;
 	ctxt = kzalloc(sizeof(*ctxt), GFP_KERNEL);
 	if (!ctxt)
@@ -2024,7 +2078,7 @@ err_out:
 
 static void ice_vsi_set_tc_cfg(struct ice_vsi *vsi)
 {
-	struct ice_dcbx_cfg *cfg = &vsi->port_info->local_dcbx_cfg;
+	struct ice_dcbx_cfg *cfg = &vsi->port_info->qos_cfg.local_dcbx_cfg;
 
 	vsi->tc_cfg.ena_tc = ice_dcb_get_ena_tc(cfg);
 	vsi->tc_cfg.numtc = ice_dcb_get_num_tc(cfg);
@@ -2091,16 +2145,143 @@ void ice_cfg_sw_lldp(struct ice_vsi *vsi, bool tx, bool create)
 	dev = ice_pf_to_dev(pf);
 	eth_fltr = create ? ice_fltr_add_eth : ice_fltr_remove_eth;
 
-	if (tx)
+	if (tx) {
 		status = eth_fltr(vsi, ETH_P_LLDP, ICE_FLTR_TX,
 				  ICE_DROP_PACKET);
-	else
-		status = eth_fltr(vsi, ETH_P_LLDP, ICE_FLTR_RX, ICE_FWD_TO_VSI);
+	} else {
+		if (ice_fw_supports_lldp_fltr_ctrl(&pf->hw)) {
+			status = ice_lldp_fltr_add_remove(&pf->hw, vsi->vsi_num,
+							  create);
+		} else {
+			status = eth_fltr(vsi, ETH_P_LLDP, ICE_FLTR_RX,
+					  ICE_FWD_TO_VSI);
+		}
+	}
 
 	if (status)
 		dev_err(dev, "Fail %s %s LLDP rule on VSI %i error: %s\n",
 			create ? "adding" : "removing", tx ? "TX" : "RX",
 			vsi->vsi_num, ice_stat_str(status));
+}
+
+/**
+ * ice_set_agg_vsi - sets up scheduler aggregator node and move VSI into it
+ * @vsi: pointer to the VSI
+ *
+ * This function will allocate new scheduler aggregator now if needed and will
+ * move specified VSI into it.
+ */
+static void ice_set_agg_vsi(struct ice_vsi *vsi)
+{
+	struct device *dev = ice_pf_to_dev(vsi->back);
+	struct ice_agg_node *agg_node_iter = NULL;
+	u32 agg_id = ICE_INVALID_AGG_NODE_ID;
+	struct ice_agg_node *agg_node = NULL;
+	int node_offset, max_agg_nodes = 0;
+	struct ice_port_info *port_info;
+	struct ice_pf *pf = vsi->back;
+	u32 agg_node_id_start = 0;
+	enum ice_status status;
+
+	/* create (as needed) scheduler aggregator node and move VSI into
+	 * corresponding aggregator node
+	 * - PF aggregator node to contains VSIs of type _PF and _CTRL
+	 * - VF aggregator nodes will contain VF VSI
+	 */
+	port_info = pf->hw.port_info;
+	if (!port_info)
+		return;
+
+	switch (vsi->type) {
+	case ICE_VSI_CTRL:
+	case ICE_VSI_LB:
+	case ICE_VSI_PF:
+		max_agg_nodes = ICE_MAX_PF_AGG_NODES;
+		agg_node_id_start = ICE_PF_AGG_NODE_ID_START;
+		agg_node_iter = &pf->pf_agg_node[0];
+		break;
+	case ICE_VSI_VF:
+		/* user can create 'n' VFs on a given PF, but since max children
+		 * per aggregator node can be only 64. Following code handles
+		 * aggregator(s) for VF VSIs, either selects a agg_node which
+		 * was already created provided num_vsis < 64, otherwise
+		 * select next available node, which will be created
+		 */
+		max_agg_nodes = ICE_MAX_VF_AGG_NODES;
+		agg_node_id_start = ICE_VF_AGG_NODE_ID_START;
+		agg_node_iter = &pf->vf_agg_node[0];
+		break;
+	default:
+		/* other VSI type, handle later if needed */
+		dev_dbg(dev, "unexpected VSI type %s\n",
+			ice_vsi_type_str(vsi->type));
+		return;
+	}
+
+	/* find the appropriate aggregator node */
+	for (node_offset = 0; node_offset < max_agg_nodes; node_offset++) {
+		/* see if we can find space in previously created
+		 * node if num_vsis < 64, otherwise skip
+		 */
+		if (agg_node_iter->num_vsis &&
+		    agg_node_iter->num_vsis == ICE_MAX_VSIS_IN_AGG_NODE) {
+			agg_node_iter++;
+			continue;
+		}
+
+		if (agg_node_iter->valid &&
+		    agg_node_iter->agg_id != ICE_INVALID_AGG_NODE_ID) {
+			agg_id = agg_node_iter->agg_id;
+			agg_node = agg_node_iter;
+			break;
+		}
+
+		/* find unclaimed agg_id */
+		if (agg_node_iter->agg_id == ICE_INVALID_AGG_NODE_ID) {
+			agg_id = node_offset + agg_node_id_start;
+			agg_node = agg_node_iter;
+			break;
+		}
+		/* move to next agg_node */
+		agg_node_iter++;
+	}
+
+	if (!agg_node)
+		return;
+
+	/* if selected aggregator node was not created, create it */
+	if (!agg_node->valid) {
+		status = ice_cfg_agg(port_info, agg_id, ICE_AGG_TYPE_AGG,
+				     (u8)vsi->tc_cfg.ena_tc);
+		if (status) {
+			dev_err(dev, "unable to create aggregator node with agg_id %u\n",
+				agg_id);
+			return;
+		}
+		/* aggregator node is created, store the neeeded info */
+		agg_node->valid = true;
+		agg_node->agg_id = agg_id;
+	}
+
+	/* move VSI to corresponding aggregator node */
+	status = ice_move_vsi_to_agg(port_info, agg_id, vsi->idx,
+				     (u8)vsi->tc_cfg.ena_tc);
+	if (status) {
+		dev_err(dev, "unable to move VSI idx %u into aggregator %u node",
+			vsi->idx, agg_id);
+		return;
+	}
+
+	/* keep active children count for aggregator node */
+	agg_node->num_vsis++;
+
+	/* cache the 'agg_id' in VSI, so that after reset - VSI will be moved
+	 * to aggregator node
+	 */
+	vsi->agg_node = agg_node;
+	dev_dbg(dev, "successfully moved VSI idx %u tc_bitmap 0x%x) into aggregator node %d which has num_vsis %u\n",
+		vsi->idx, vsi->tc_cfg.ena_tc, vsi->agg_node->agg_id,
+		vsi->agg_node->num_vsis);
 }
 
 /**
@@ -2254,7 +2435,7 @@ ice_vsi_setup(struct ice_pf *pf, struct ice_port_info *pi,
 	if (status) {
 		dev_err(dev, "VSI %d failed lan queue config, error %s\n",
 			vsi->vsi_num, ice_stat_str(status));
-		goto unroll_vector_base;
+		goto unroll_clear_rings;
 	}
 
 	/* Add switch rule to drop all Tx Flow Control Frames, of look up
@@ -2273,6 +2454,8 @@ ice_vsi_setup(struct ice_pf *pf, struct ice_port_info *pi,
 			ice_cfg_sw_lldp(vsi, true, true);
 		}
 
+	if (!vsi->agg_node)
+		ice_set_agg_vsi(vsi);
 	return vsi;
 
 unroll_clear_rings:
@@ -2288,6 +2471,8 @@ unroll_vsi_init:
 unroll_get_qs:
 	ice_vsi_put_qs(vsi);
 unroll_vsi_alloc:
+	if (vsi_type == ICE_VSI_VF)
+		ice_enable_lag(pf->lag);
 	ice_vsi_clear(vsi);
 
 	return NULL;
@@ -2567,8 +2752,10 @@ int ice_vsi_release(struct ice_vsi *vsi)
 	 * PF that is running the work queue items currently. This is done to
 	 * avoid check_flush_dependency() warning on this wq
 	 */
-	if (vsi->netdev && !ice_is_reset_in_progress(pf->state))
+	if (vsi->netdev && !ice_is_reset_in_progress(pf->state)) {
 		unregister_netdev(vsi->netdev);
+		ice_devlink_destroy_port(vsi);
+	}
 
 	if (test_bit(ICE_FLAG_RSS_ENA, pf->flags))
 		ice_rss_clean(vsi);
@@ -2613,6 +2800,9 @@ int ice_vsi_release(struct ice_vsi *vsi)
 		vsi->netdev = NULL;
 	}
 
+	if (vsi->type == ICE_VSI_VF &&
+	    vsi->agg_node && vsi->agg_node->valid)
+		vsi->agg_node->num_vsis--;
 	ice_vsi_clear_rings(vsi);
 
 	ice_vsi_put_qs(vsi);

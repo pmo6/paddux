@@ -536,7 +536,7 @@ static int mchp_i2s_mcc_hw_params(struct snd_pcm_substream *substream,
 		/* cpu is BCLK master */
 		mrb |= MCHP_I2SMCC_MRB_CLKSEL_INT;
 		set_divs = 1;
-		/* fall through */
+		fallthrough;
 	case SND_SOC_DAIFMT_CBM_CFM:
 		/* cpu is slave */
 		mra |= MCHP_I2SMCC_MRA_MODE_SLAVE;
@@ -859,8 +859,8 @@ static struct snd_soc_dai_driver mchp_i2s_mcc_dai = {
 		.formats = MCHP_I2SMCC_FORMATS,
 	},
 	.ops = &mchp_i2s_mcc_dai_ops,
-	.symmetric_rates = 1,
-	.symmetric_samplebits = 1,
+	.symmetric_rate = 1,
+	.symmetric_sample_bits = 1,
 	.symmetric_channels = 1,
 };
 

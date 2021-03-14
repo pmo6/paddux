@@ -170,7 +170,7 @@ static int vmw_stdu_define_st(struct vmw_private *dev_priv,
 		SVGA3dCmdDefineGBScreenTarget body;
 	} *cmd;
 
-	cmd = VMW_FIFO_RESERVE(dev_priv, sizeof(*cmd));
+	cmd = VMW_CMD_RESERVE(dev_priv, sizeof(*cmd));
 	if (unlikely(cmd == NULL))
 		return -ENOMEM;
 
@@ -188,7 +188,7 @@ static int vmw_stdu_define_st(struct vmw_private *dev_priv,
 	stdu->base.set_gui_x = cmd->body.xRoot;
 	stdu->base.set_gui_y = cmd->body.yRoot;
 
-	vmw_fifo_commit(dev_priv, sizeof(*cmd));
+	vmw_cmd_commit(dev_priv, sizeof(*cmd));
 
 	stdu->defined = true;
 	stdu->display_width  = mode->hdisplay;
@@ -229,7 +229,7 @@ static int vmw_stdu_bind_st(struct vmw_private *dev_priv,
 	memset(&image, 0, sizeof(image));
 	image.sid = res ? res->id : SVGA3D_INVALID_ID;
 
-	cmd = VMW_FIFO_RESERVE(dev_priv, sizeof(*cmd));
+	cmd = VMW_CMD_RESERVE(dev_priv, sizeof(*cmd));
 	if (unlikely(cmd == NULL))
 		return -ENOMEM;
 
@@ -239,7 +239,7 @@ static int vmw_stdu_bind_st(struct vmw_private *dev_priv,
 	cmd->body.stid   = stdu->base.unit;
 	cmd->body.image  = image;
 
-	vmw_fifo_commit(dev_priv, sizeof(*cmd));
+	vmw_cmd_commit(dev_priv, sizeof(*cmd));
 
 	return 0;
 }
@@ -293,7 +293,7 @@ static int vmw_stdu_update_st(struct vmw_private *dev_priv,
 		return -EINVAL;
 	}
 
-	cmd = VMW_FIFO_RESERVE(dev_priv, sizeof(*cmd));
+	cmd = VMW_CMD_RESERVE(dev_priv, sizeof(*cmd));
 	if (unlikely(cmd == NULL))
 		return -ENOMEM;
 
@@ -301,7 +301,7 @@ static int vmw_stdu_update_st(struct vmw_private *dev_priv,
 				 0, stdu->display_width,
 				 0, stdu->display_height);
 
-	vmw_fifo_commit(dev_priv, sizeof(*cmd));
+	vmw_cmd_commit(dev_priv, sizeof(*cmd));
 
 	return 0;
 }
@@ -329,7 +329,7 @@ static int vmw_stdu_destroy_st(struct vmw_private *dev_priv,
 	if (unlikely(!stdu->defined))
 		return 0;
 
-	cmd = VMW_FIFO_RESERVE(dev_priv, sizeof(*cmd));
+	cmd = VMW_CMD_RESERVE(dev_priv, sizeof(*cmd));
 	if (unlikely(cmd == NULL))
 		return -ENOMEM;
 
@@ -338,7 +338,7 @@ static int vmw_stdu_destroy_st(struct vmw_private *dev_priv,
 
 	cmd->body.stid   = stdu->base.unit;
 
-	vmw_fifo_commit(dev_priv, sizeof(*cmd));
+	vmw_cmd_commit(dev_priv, sizeof(*cmd));
 
 	/* Force sync */
 	ret = vmw_fallback_wait(dev_priv, false, true, 0, false, 3*HZ);
@@ -408,12 +408,12 @@ static void vmw_stdu_crtc_helper_prepare(struct drm_crtc *crtc)
 }
 
 static void vmw_stdu_crtc_atomic_enable(struct drm_crtc *crtc,
-					struct drm_crtc_state *old_state)
+					struct drm_atomic_state *state)
 {
 }
 
 static void vmw_stdu_crtc_atomic_disable(struct drm_crtc *crtc,
-					 struct drm_crtc_state *old_state)
+					 struct drm_atomic_state *state)
 {
 	struct vmw_private *dev_priv;
 	struct vmw_screen_target_display_unit *stdu;
@@ -499,7 +499,7 @@ static void vmw_stdu_bo_fifo_commit(struct vmw_kms_dirty *dirty)
 	size_t blit_size = sizeof(*blit) * dirty->num_hits + sizeof(*suffix);
 
 	if (!dirty->num_hits) {
-		vmw_fifo_commit(dirty->dev_priv, 0);
+		vmw_cmd_commit(dirty->dev_priv, 0);
 		return;
 	}
 
@@ -512,7 +512,7 @@ static void vmw_stdu_bo_fifo_commit(struct vmw_kms_dirty *dirty)
 	cmd->body.host.mipmap = 0;
 	cmd->body.transfer = ddirty->transfer;
 	suffix->suffixSize = sizeof(*suffix);
-	suffix->maximumOffset = ddirty->buf->base.num_pages * PAGE_SIZE;
+	suffix->maximumOffset = ddirty->buf->base.base.size;
 
 	if (ddirty->transfer == SVGA3D_WRITE_HOST_VRAM) {
 		blit_size += sizeof(struct vmw_stdu_update);
@@ -522,7 +522,7 @@ static void vmw_stdu_bo_fifo_commit(struct vmw_kms_dirty *dirty)
 					 ddirty->top, ddirty->bottom);
 	}
 
-	vmw_fifo_commit(dirty->dev_priv, sizeof(*cmd) + blit_size);
+	vmw_cmd_commit(dirty->dev_priv, sizeof(*cmd) + blit_size);
 
 	stdu->display_srf->res.res_dirty = true;
 	ddirty->left = ddirty->top = S32_MAX;
@@ -628,7 +628,7 @@ static void vmw_stdu_bo_cpu_commit(struct vmw_kms_dirty *dirty)
 
 
 		dev_priv = vmw_priv(stdu->base.crtc.dev);
-		cmd = VMW_FIFO_RESERVE(dev_priv, sizeof(*cmd));
+		cmd = VMW_CMD_RESERVE(dev_priv, sizeof(*cmd));
 		if (!cmd)
 			goto out_cleanup;
 
@@ -636,7 +636,7 @@ static void vmw_stdu_bo_cpu_commit(struct vmw_kms_dirty *dirty)
 					 region.x1, region.x2,
 					 region.y1, region.y2);
 
-		vmw_fifo_commit(dev_priv, sizeof(*cmd));
+		vmw_cmd_commit(dev_priv, sizeof(*cmd));
 	}
 
 out_cleanup:
@@ -795,7 +795,7 @@ static void vmw_kms_stdu_surface_fifo_commit(struct vmw_kms_dirty *dirty)
 	size_t commit_size;
 
 	if (!dirty->num_hits) {
-		vmw_fifo_commit(dirty->dev_priv, 0);
+		vmw_cmd_commit(dirty->dev_priv, 0);
 		return;
 	}
 
@@ -817,7 +817,7 @@ static void vmw_kms_stdu_surface_fifo_commit(struct vmw_kms_dirty *dirty)
 	vmw_stdu_populate_update(update, stdu->base.unit, sdirty->left,
 				 sdirty->right, sdirty->top, sdirty->bottom);
 
-	vmw_fifo_commit(dirty->dev_priv, commit_size);
+	vmw_cmd_commit(dirty->dev_priv, commit_size);
 
 	sdirty->left = sdirty->top = S32_MAX;
 	sdirty->right = sdirty->bottom = S32_MIN;
@@ -1238,7 +1238,7 @@ static uint32_t vmw_stdu_bo_populate_update(struct vmw_du_update_plane  *update,
 	vfbbo = container_of(update->vfb, typeof(*vfbbo), base);
 
 	suffix->suffixSize = sizeof(*suffix);
-	suffix->maximumOffset = vfbbo->buffer->base.num_pages * PAGE_SIZE;
+	suffix->maximumOffset = vfbbo->buffer->base.base.size;
 
 	vmw_stdu_populate_update(&suffix[1], stdu->base.unit, bb->x1, bb->x2,
 				 bb->y1, bb->y2);
@@ -1713,7 +1713,7 @@ static const struct drm_crtc_helper_funcs vmw_stdu_crtc_helper_funcs = {
 static int vmw_stdu_init(struct vmw_private *dev_priv, unsigned unit)
 {
 	struct vmw_screen_target_display_unit *stdu;
-	struct drm_device *dev = dev_priv->dev;
+	struct drm_device *dev = &dev_priv->drm;
 	struct drm_connector *connector;
 	struct drm_encoder *encoder;
 	struct drm_plane *primary, *cursor;
@@ -1738,8 +1738,6 @@ static int vmw_stdu_init(struct vmw_private *dev_priv, unsigned unit)
 	stdu->base.is_implicit = false;
 
 	/* Initialize primary plane */
-	vmw_du_plane_reset(primary);
-
 	ret = drm_universal_plane_init(dev, primary,
 				       0, &vmw_stdu_plane_funcs,
 				       vmw_primary_plane_formats,
@@ -1754,8 +1752,6 @@ static int vmw_stdu_init(struct vmw_private *dev_priv, unsigned unit)
 	drm_plane_enable_fb_damage_clips(primary);
 
 	/* Initialize cursor plane */
-	vmw_du_plane_reset(cursor);
-
 	ret = drm_universal_plane_init(dev, cursor,
 			0, &vmw_stdu_cursor_funcs,
 			vmw_cursor_plane_formats,
@@ -1768,8 +1764,6 @@ static int vmw_stdu_init(struct vmw_private *dev_priv, unsigned unit)
 	}
 
 	drm_plane_helper_add(cursor, &vmw_stdu_cursor_plane_helper_funcs);
-
-	vmw_du_connector_reset(connector);
 
 	ret = drm_connector_init(dev, connector, &vmw_stdu_connector_funcs,
 				 DRM_MODE_CONNECTOR_VIRTUAL);
@@ -1798,7 +1792,6 @@ static int vmw_stdu_init(struct vmw_private *dev_priv, unsigned unit)
 		goto err_free_encoder;
 	}
 
-	vmw_du_crtc_reset(crtc);
 	ret = drm_crtc_init_with_planes(dev, crtc, &stdu->base.primary,
 					&stdu->base.cursor,
 					&vmw_stdu_crtc_funcs, NULL);
@@ -1868,7 +1861,7 @@ static void vmw_stdu_destroy(struct vmw_screen_target_display_unit *stdu)
  */
 int vmw_kms_stdu_init_display(struct vmw_private *dev_priv)
 {
-	struct drm_device *dev = dev_priv->dev;
+	struct drm_device *dev = &dev_priv->drm;
 	int i, ret;
 
 
@@ -1893,6 +1886,8 @@ int vmw_kms_stdu_init_display(struct vmw_private *dev_priv)
 			return ret;
 		}
 	}
+
+	drm_mode_config_reset(dev);
 
 	DRM_INFO("Screen Target Display device initialized\n");
 

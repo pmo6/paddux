@@ -72,23 +72,15 @@ static void mlx5i_build_nic_params(struct mlx5_core_dev *mdev,
 }
 
 /* Called directly after IPoIB netdevice was created to initialize SW structs */
-int mlx5i_init(struct mlx5_core_dev *mdev,
-	       struct net_device *netdev,
-	       const struct mlx5e_profile *profile,
-	       void *ppriv)
+int mlx5i_init(struct mlx5_core_dev *mdev, struct net_device *netdev)
 {
 	struct mlx5e_priv *priv  = mlx5i_epriv(netdev);
-	int err;
 
-	err = mlx5e_netdev_init(netdev, priv, mdev, profile, ppriv);
-	if (err)
-		return err;
-
+	netif_carrier_off(netdev);
 	mlx5e_set_netdev_mtu_boundaries(priv);
 	netdev->mtu = netdev->max_mtu;
 
-	mlx5e_build_nic_params(priv, NULL, &priv->rss_params, &priv->channels.params,
-			       netdev->mtu);
+	mlx5e_build_nic_params(priv, NULL, netdev->mtu);
 	mlx5i_build_nic_params(mdev, &priv->channels.params);
 
 	mlx5e_timestamp_init(priv);
@@ -112,7 +104,7 @@ int mlx5i_init(struct mlx5_core_dev *mdev,
 /* Called directly before IPoIB netdevice is destroyed to cleanup SW structs */
 void mlx5i_cleanup(struct mlx5e_priv *priv)
 {
-	mlx5e_netdev_cleanup(priv->netdev, priv);
+	mlx5e_priv_cleanup(priv);
 }
 
 static void mlx5i_grp_sw_update_stats(struct mlx5e_priv *priv)
@@ -226,12 +218,19 @@ void mlx5i_uninit_underlay_qp(struct mlx5e_priv *priv)
 
 int mlx5i_create_underlay_qp(struct mlx5e_priv *priv)
 {
+	unsigned char *dev_addr = priv->netdev->dev_addr;
 	u32 out[MLX5_ST_SZ_DW(create_qp_out)] = {};
 	u32 in[MLX5_ST_SZ_DW(create_qp_in)] = {};
 	struct mlx5i_priv *ipriv = priv->ppriv;
 	void *addr_path;
+	int qpn = 0;
 	int ret = 0;
 	void *qpc;
+
+	if (MLX5_CAP_GEN(priv->mdev, mkey_by_name)) {
+		qpn = (dev_addr[1] << 16) + (dev_addr[2] << 8) + dev_addr[3];
+		MLX5_SET(create_qp_in, in, input_qpn, qpn);
+	}
 
 	qpc = MLX5_ADDR_OF(create_qp_in, in, qpc);
 	MLX5_SET(qpc, qpc, st, MLX5_QP_ST_UD);
@@ -464,8 +463,7 @@ static const struct mlx5e_profile mlx5i_nic_profile = {
 	.update_rx	   = mlx5i_update_nic_rx,
 	.update_stats	   = NULL, /* mlx5i_update_stats */
 	.update_carrier    = NULL, /* no HW update in IB link */
-	.rx_handlers.handle_rx_cqe       = mlx5i_handle_rx_cqe,
-	.rx_handlers.handle_rx_cqe_mpwqe = NULL, /* Not supported */
+	.rx_handlers       = &mlx5i_rx_handlers,
 	.max_tc		   = MLX5I_MAX_NUM_TC,
 	.rq_groups	   = MLX5E_NUM_RQ_GROUPS(REGULAR),
 	.stats_grps        = mlx5i_stats_grps,
@@ -747,7 +745,14 @@ static int mlx5_rdma_setup_rn(struct ib_device *ibdev, u8 port_num,
 			goto destroy_ht;
 	}
 
-	prof->init(mdev, netdev, prof, ipriv);
+	err = mlx5e_priv_init(epriv, netdev, mdev);
+	if (err)
+		goto destroy_mdev_resources;
+
+	epriv->profile = prof;
+	epriv->ppriv = ipriv;
+
+	prof->init(mdev, netdev);
 
 	err = mlx5e_attach_netdev(epriv);
 	if (err)
@@ -771,6 +776,7 @@ detach:
 	prof->cleanup(epriv);
 	if (ipriv->sub_interface)
 		return err;
+destroy_mdev_resources:
 	mlx5e_destroy_mdev_resources(mdev);
 destroy_ht:
 	mlx5i_pkey_qpn_ht_cleanup(netdev);

@@ -89,8 +89,7 @@ static inline void update_tty_status(struct ser_device *ser)
 	ser->tty_status =
 		ser->tty->stopped << 5 |
 		ser->tty->flow_stopped << 3 |
-		ser->tty->packet << 2 |
-		ser->tty->port->low_latency << 1;
+		ser->tty->packet << 2;
 }
 static inline void debugfs_init(struct ser_device *ser, struct tty_struct *tty)
 {
@@ -266,7 +265,7 @@ error:
 	return tty_wr;
 }
 
-static int caif_xmit(struct sk_buff *skb, struct net_device *dev)
+static netdev_tx_t caif_xmit(struct sk_buff *skb, struct net_device *dev)
 {
 	struct ser_device *ser;
 

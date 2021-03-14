@@ -62,7 +62,8 @@ enum amdgpu_ring_type {
 	AMDGPU_RING_TYPE_VCN_DEC	= AMDGPU_HW_IP_VCN_DEC,
 	AMDGPU_RING_TYPE_VCN_ENC	= AMDGPU_HW_IP_VCN_ENC,
 	AMDGPU_RING_TYPE_VCN_JPEG	= AMDGPU_HW_IP_VCN_JPEG,
-	AMDGPU_RING_TYPE_KIQ
+	AMDGPU_RING_TYPE_KIQ,
+	AMDGPU_RING_TYPE_MES
 };
 
 enum amdgpu_ib_pool_type {
@@ -196,6 +197,7 @@ struct amdgpu_ring_funcs {
 	void (*soft_recovery)(struct amdgpu_ring *ring, unsigned vmid);
 	int (*preempt_ib)(struct amdgpu_ring *ring);
 	void (*emit_mem_sync)(struct amdgpu_ring *ring);
+	void (*emit_wave_limit)(struct amdgpu_ring *ring, bool enable);
 };
 
 struct amdgpu_ring {
@@ -241,11 +243,7 @@ struct amdgpu_ring {
 	struct dma_fence	*vmid_wait;
 	bool			has_compute_vm_bug;
 	bool			no_scheduler;
-
-	atomic_t		num_jobs[DRM_SCHED_PRIORITY_MAX];
-	struct mutex		priority_mutex;
-	/* protected by priority_mutex */
-	int			priority;
+	int			hw_prio;
 
 #if defined(CONFIG_DEBUG_FS)
 	struct dentry *ent;

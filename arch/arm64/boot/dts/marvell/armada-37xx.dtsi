@@ -316,7 +316,7 @@
 				};
 
 				pcie_reset_pins: pcie-reset-pins {
-					groups = "pcie1";
+					groups = "pcie1"; /* this actually controls "pcie1_reset" */
 					function = "gpio";
 				};
 
@@ -458,6 +458,8 @@
 				reg = <0xe0000 0x178>;
 				interrupts = <GIC_SPI 27 IRQ_TYPE_LEVEL_HIGH>;
 				clocks = <&nb_periph_clk 1>;
+				phys = <&comphy2 0>;
+				phy-names = "sata-phy";
 				status = "disabled";
 			};
 

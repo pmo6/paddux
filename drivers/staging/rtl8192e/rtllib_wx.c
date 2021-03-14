@@ -341,8 +341,6 @@ int rtllib_wx_set_encode(struct rtllib_device *ieee,
 		goto done;
 	}
 
-
-
 	sec.enabled = 1;
 	sec.flags |= SEC_ENABLED;
 
@@ -680,7 +678,7 @@ int rtllib_wx_set_mlme(struct rtllib_device *ieee,
 	switch (mlme->cmd) {
 	case IW_MLME_DEAUTH:
 		deauth = true;
-		/* fall through */
+		fallthrough;
 	case IW_MLME_DISASSOC:
 		if (deauth)
 			netdev_info(ieee->dev, "disauth packet !\n");

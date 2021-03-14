@@ -402,13 +402,6 @@ void __init prom_meminit(void)
 		}
 		__node_data[node] = &null_node;
 	}
-
-	memblocks_present();
-}
-
-void __init prom_free_prom_memory(void)
-{
-	/* We got nothing to free here ...  */
 }
 
 extern void setup_zero_pages(void);

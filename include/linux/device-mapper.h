@@ -29,7 +29,6 @@ enum dm_queue_mode {
 	DM_TYPE_BIO_BASED	 = 1,
 	DM_TYPE_REQUEST_BASED	 = 2,
 	DM_TYPE_DAX_BIO_BASED	 = 3,
-	DM_TYPE_NVME_BIO_BASED	 = 4,
 };
 
 typedef enum { STATUSTYPE_INFO, STATUSTYPE_TABLE } status_type_t;
@@ -94,9 +93,18 @@ typedef int (*dm_message_fn) (struct dm_target *ti, unsigned argc, char **argv,
 
 typedef int (*dm_prepare_ioctl_fn) (struct dm_target *ti, struct block_device **bdev);
 
+#ifdef CONFIG_BLK_DEV_ZONED
 typedef int (*dm_report_zones_fn) (struct dm_target *ti,
 				   struct dm_report_zones_args *args,
 				   unsigned int nr_zones);
+#else
+/*
+ * Define dm_report_zones_fn so that targets can assign to NULL if
+ * CONFIG_BLK_DEV_ZONED disabled. Otherwise each target needs to do
+ * awkward #ifdefs in their target_type, etc.
+ */
+typedef int (*dm_report_zones_fn) (struct dm_target *dummy);
+#endif
 
 /*
  * These iteration functions are typically used to check (and combine)
@@ -188,9 +196,7 @@ struct target_type {
 	dm_status_fn status;
 	dm_message_fn message;
 	dm_prepare_ioctl_fn prepare_ioctl;
-#ifdef CONFIG_BLK_DEV_ZONED
 	dm_report_zones_fn report_zones;
-#endif
 	dm_busy_fn busy;
 	dm_iterate_devices_fn iterate_devices;
 	dm_io_hints_fn io_hints;
@@ -249,8 +255,25 @@ struct target_type {
 /*
  * Indicates that a target supports host-managed zoned block devices.
  */
+#ifdef CONFIG_BLK_DEV_ZONED
 #define DM_TARGET_ZONED_HM		0x00000040
 #define dm_target_supports_zoned_hm(type) ((type)->features & DM_TARGET_ZONED_HM)
+#else
+#define DM_TARGET_ZONED_HM		0x00000000
+#define dm_target_supports_zoned_hm(type) (false)
+#endif
+
+/*
+ * A target handles REQ_NOWAIT
+ */
+#define DM_TARGET_NOWAIT		0x00000080
+#define dm_target_supports_nowait(type) ((type)->features & DM_TARGET_NOWAIT)
+
+/*
+ * A target supports passing through inline crypto support.
+ */
+#define DM_TARGET_PASSES_CRYPTO		0x00000100
+#define dm_target_passes_crypto(type) ((type)->features & DM_TARGET_PASSES_CRYPTO)
 
 struct dm_target {
 	struct dm_table *table;
@@ -320,12 +343,11 @@ struct dm_target {
 	 * whether or not its underlying devices have support.
 	 */
 	bool discards_supported:1;
-};
 
-/* Each target can link one of these into the table */
-struct dm_target_callbacks {
-	struct list_head list;
-	int (*congested_fn) (struct dm_target_callbacks *, int);
+	/*
+	 * Set if we need to limit the number of in-flight bios when swapping.
+	 */
+	bool limit_swap_bios:1;
 };
 
 void *dm_per_bio_data(struct bio *bio, size_t data_size);
@@ -479,11 +501,6 @@ int dm_table_add_target(struct dm_table *t, const char *type,
 			sector_t start, sector_t len, char *params);
 
 /*
- * Target_ctr should call this if it needs to add any callbacks.
- */
-void dm_table_add_target_callbacks(struct dm_table *t, struct dm_target_callbacks *cb);
-
-/*
  * Target can use this to set the table's type.
  * Can only ever be called from a target's ctr.
  * Useful for "hybrid" target (supports both bio-based
@@ -538,6 +555,11 @@ void dm_table_run_md_queue_async(struct dm_table *t);
  */
 struct dm_table *dm_swap_table(struct mapped_device *md,
 			       struct dm_table *t);
+
+/*
+ * Table keyslot manager functions
+ */
+void dm_destroy_keyslot_manager(struct blk_keyslot_manager *ksm);
 
 /*
  * A wrapper around vmalloc.

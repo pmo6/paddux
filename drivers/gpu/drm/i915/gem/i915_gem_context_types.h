@@ -108,7 +108,6 @@ struct i915_gem_context {
 
 	/** link: place with &drm_i915_private.context_list */
 	struct list_head link;
-	struct llist_node free_link;
 
 	/**
 	 * @ref: reference count
@@ -170,6 +169,7 @@ struct i915_gem_context {
 	 * per vm, which may be one per context or shared with the global GTT)
 	 */
 	struct radix_tree_root handles_vma;
+	struct mutex lut_mutex;
 
 	/**
 	 * @name: arbitrary name, used for user debug
